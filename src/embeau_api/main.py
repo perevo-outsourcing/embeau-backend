@@ -69,13 +69,24 @@ For research purposes, all user interactions are logged (with consent).
     redoc_url="/redoc" if settings.debug else None,
 )
 
-# Configure CORS
+# Configure CORS - 모든 출처 허용 (연구용)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.cors_origins,
+    allow_origins=[
+        "https://embeau.vercel.app",
+        "http://embeau.vercel.app",
+        "http://localhost:3000",
+        "http://localhost:8000",
+        "http://localhost:8888",
+        "http://127.0.0.1:3000",
+        "http://127.0.0.1:8000",
+        "http://127.0.0.1:8888",
+    ],
+    allow_origin_regex=r"https://.*\.vercel\.app",  # 모든 Vercel 프리뷰 URL 허용
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # 모든 HTTP 메서드 허용
+    allow_headers=["*"],  # 모든 헤더 허용
+    expose_headers=["*"], # 모든 응답 헤더 노출
 )
 
 

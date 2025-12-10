@@ -8,3 +8,13 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Environment variables (contains secrets)
+.env
+
+# Logs
+logs/
+*.log
+
+# Research data
+research_logs.jsonl
