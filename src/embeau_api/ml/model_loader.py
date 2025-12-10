@@ -160,30 +160,51 @@ def segment_face(image_pil: Image.Image) -> tuple[Image.Image, np.ndarray]:
 
 def detect_emotion(face_image: Image.Image) -> tuple[str, float]:
     """
-    Detect facial emotion using DenseNet121.
+    Detect facial emotion using DeepFace (auto-downloads model).
 
     Returns:
         emotion: Predicted emotion label
         confidence: Prediction confidence
     """
+    # Try DeepFace emotion detection first (auto-downloads model)
+    try:
+        from deepface import DeepFace
+
+        rgb = np.array(face_image)
+        result = DeepFace.analyze(
+            rgb,
+            actions=["emotion"],
+            enforce_detection=False,
+            silent=True
+        )
+
+        if result and isinstance(result, list):
+            result = result[0]
+
+        emotions = result.get("emotion", {})
+        if emotions:
+            dominant_emotion = result.get("dominant_emotion", "neutral")
+            confidence = emotions.get(dominant_emotion, 50.0) / 100.0
+            return dominant_emotion, confidence
+
+    except Exception as e:
+        logger.warning(f"DeepFace emotion detection failed: {e}")
+
+    # Fallback to custom DenseNet121 model if available
     model = get_emotion_model()
+    if model is not None:
+        try:
+            input_tensor = EMOTION_TRANSFORM(face_image).unsqueeze(0).to(DEVICE)
+            with torch.no_grad():
+                logits = model(input_tensor)
+                probs = torch.nn.functional.softmax(logits, dim=1)[0].cpu().numpy()
+            emotion_idx = int(np.argmax(probs))
+            return EMOTION_LABELS[emotion_idx], float(probs[emotion_idx])
+        except Exception as e:
+            logger.warning(f"DenseNet121 emotion detection failed: {e}")
 
-    if model is None:
-        # Fallback: return neutral with low confidence
-        logger.warning("Emotion model not available, using fallback")
-        return "neutral", 0.5
-
-    input_tensor = EMOTION_TRANSFORM(face_image).unsqueeze(0).to(DEVICE)
-
-    with torch.no_grad():
-        logits = model(input_tensor)
-        probs = torch.nn.functional.softmax(logits, dim=1)[0].cpu().numpy()
-
-    emotion_idx = int(np.argmax(probs))
-    emotion = EMOTION_LABELS[emotion_idx]
-    confidence = float(probs[emotion_idx])
-
-    return emotion, confidence
+    # Final fallback
+    return "neutral", 0.5
 
 
 def crop_face_for_emotion(image_pil: Image.Image) -> Image.Image:
