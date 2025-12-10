@@ -42,8 +42,6 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     openai_embed_model: str = "text-embedding-3-small"
 
-    gemini_api_key: str = ""
-
     # ML Models (local PyTorch models)
     use_local_models: bool = True
     models_dir: str = "models"
