@@ -148,12 +148,20 @@ class ColorAnalyzerService:
             tone_data = analysis_data.get("tone", {})
             emotion_data = analysis_data.get("emotion", {})
 
-            season = tone_data.get("season", "summer").lower()
-            subtype = tone_data.get("subtype", "cool").lower()
+            # Validate season - must be one of: spring, summer, autumn, winter
+            valid_seasons = {"spring", "summer", "autumn", "winter"}
+            raw_season = tone_data.get("season", "summer").lower()
+            season = raw_season if raw_season in valid_seasons else "summer"
+
+            # Validate subtype
+            valid_subtypes = {"warm", "cool", "clear", "soft", "deep", "light"}
+            raw_subtype = tone_data.get("subtype", "cool").lower()
+            subtype = raw_subtype if raw_subtype in valid_subtypes else "cool"
+
             confidence = tone_data.get("confidence", 0.85)
 
-            # Determine tone from subtype
-            tone = "cool" if "cool" in subtype else "warm"
+            # Determine tone from subtype - must be "warm" or "cool"
+            tone = "cool" if subtype in {"cool", "clear", "soft"} else "warm"
 
             # Get recommended colors
             palette_key = f"{season}_{subtype}"
@@ -236,15 +244,18 @@ class ColorAnalyzerService:
 분석 항목:
 1. 피부 언더톤 (웜톤/쿨톤)
 2. 피부 밝기 (밝음/중간/어두움)
-3. 계절 타입 (봄/여름/가을/겨울)
-4. 세부 타입 (warm/cool/clear/soft/deep/light)
+3. 계절 타입 - 반드시 다음 중 하나: spring, summer, autumn, winter
+4. 세부 타입 - 반드시 다음 중 하나: warm, cool, clear, soft, deep, light
 5. 표정 (happy/neutral/calm/sad/surprised/angry)
+
+중요: 이미지가 불분명하거나 얼굴이 잘 보이지 않아도, 가장 가능성이 높은 값을 선택해주세요.
+절대로 "unknown", "unclear", "cannot determine" 같은 값을 사용하지 마세요.
 
 다음 JSON 형식으로만 응답해주세요:
 {
     "tone": {
-        "season": "spring|summer|autumn|winter",
-        "subtype": "warm|cool|clear|soft|deep|light",
+        "season": "spring 또는 summer 또는 autumn 또는 winter 중 하나만",
+        "subtype": "warm 또는 cool 또는 clear 또는 soft 또는 deep 또는 light 중 하나만",
         "confidence": 0.0-1.0,
         "undertone": "warm|cool|neutral",
         "brightness": "light|medium|dark",
