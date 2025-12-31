@@ -1,15 +1,12 @@
-"""Color analysis service - integrates local PyTorch models and external APIs."""
+"""Color analysis service - uses ChatGPT Vision API for analysis."""
 
 import base64
-import io
 import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
 
-import httpx
-import numpy as np
-from PIL import Image
+from openai import AsyncOpenAI
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,14 +117,14 @@ HEALING_COLORS = {
 
 
 class ColorAnalyzerService:
-    """Service for color analysis operations."""
+    """Service for color analysis operations using ChatGPT Vision API."""
 
     def __init__(self, db: AsyncSession) -> None:
         self.db = db
-        self.http_client = httpx.AsyncClient(timeout=60.0)
+        self.openai = AsyncOpenAI(api_key=settings.openai_api_key) if settings.openai_api_key else None
 
     async def analyze_image(self, user_id: str, image_data: str) -> PersonalColorResult:
-        """Analyze an image to determine personal color using local models."""
+        """Analyze an image to determine personal color using ChatGPT Vision API."""
         start_time = time.time()
 
         research_logger.log(
@@ -137,18 +134,15 @@ class ColorAnalyzerService:
         )
 
         try:
-            # Decode base64 image
+            # Ensure base64 has proper prefix for API
             if "," in image_data:
-                image_data = image_data.split(",")[1]
-            image_bytes = base64.b64decode(image_data)
-            image_pil = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-
-            # Use local models if available
-            if settings.use_local_models:
-                analysis_data = await self._analyze_with_local_models(image_pil)
+                base64_image = image_data.split(",")[1]
+                image_url = f"data:image/jpeg;base64,{base64_image}"
             else:
-                # Fallback to external API
-                analysis_data = await self._analyze_with_external_api(image_bytes)
+                image_url = f"data:image/jpeg;base64,{image_data}"
+
+            # Analyze with ChatGPT Vision API
+            analysis_data = await self._analyze_with_vision_api(image_url)
 
             # Parse response
             tone_data = analysis_data.get("tone", {})
@@ -156,7 +150,7 @@ class ColorAnalyzerService:
 
             season = tone_data.get("season", "summer").lower()
             subtype = tone_data.get("subtype", "cool").lower()
-            confidence = tone_data.get("confidence", 0.8)
+            confidence = tone_data.get("confidence", 0.85)
 
             # Determine tone from subtype
             tone = "cool" if "cool" in subtype else "warm"
@@ -231,114 +225,85 @@ class ColorAnalyzerService:
             logger.exception("Color analysis failed")
             raise ColorAnalysisError(f"Failed to analyze image: {str(e)}")
 
-    async def _analyze_with_local_models(self, image_pil: Image.Image) -> dict:
-        """Analyze image using local PyTorch models (BiSeNet + DenseNet121)."""
-        from embeau_api.ml import crop_face_for_emotion, detect_emotion, segment_face
+    async def _analyze_with_vision_api(self, image_url: str) -> dict:
+        """Analyze image using ChatGPT Vision API (gpt-4o for best accuracy)."""
+        if not self.openai:
+            logger.warning("OpenAI API key not configured, using fallback")
+            return self._fallback_analysis()
 
-        # 1. Face segmentation and skin extraction
-        filled_pil, skin_mask = segment_face(image_pil)
+        prompt = """이 얼굴 이미지를 분석하여 퍼스널 컬러와 표정을 판단해주세요.
 
-        # 2. Analyze skin tone from segmented image
-        season, subtype, confidence = self._analyze_skin_tone(filled_pil, skin_mask)
+분석 항목:
+1. 피부 언더톤 (웜톤/쿨톤)
+2. 피부 밝기 (밝음/중간/어두움)
+3. 계절 타입 (봄/여름/가을/겨울)
+4. 세부 타입 (warm/cool/clear/soft/deep/light)
+5. 표정 (happy/neutral/calm/sad/surprised/angry)
 
-        # 3. Emotion detection
-        face_crop = crop_face_for_emotion(image_pil)
-        emotion, emotion_confidence = detect_emotion(face_crop)
+다음 JSON 형식으로만 응답해주세요:
+{
+    "tone": {
+        "season": "spring|summer|autumn|winter",
+        "subtype": "warm|cool|clear|soft|deep|light",
+        "confidence": 0.0-1.0,
+        "undertone": "warm|cool|neutral",
+        "brightness": "light|medium|dark",
+        "analysis_reason": "분석 이유 설명"
+    },
+    "emotion": {
+        "facial_expression": "happy|neutral|calm|sad|surprised|angry",
+        "facial_expression_confidence": 0.0-1.0
+    }
+}"""
 
-        return {
-            "tone": {
-                "season": season,
-                "subtype": subtype,
-                "confidence": confidence,
-            },
-            "emotion": {
-                "facial_expression": emotion,
-                "facial_expression_confidence": emotion_confidence,
-            },
-            "source": "local_models",
-        }
-
-    def _analyze_skin_tone(
-        self, filled_pil: Image.Image, skin_mask: np.ndarray
-    ) -> tuple[str, str, float]:
-        """Analyze skin tone from segmented face image."""
-        import cv2
-
-        # Convert to numpy and extract skin pixels
-        img_rgb = np.array(filled_pil)
-        skin_pixels = img_rgb[skin_mask > 0]
-
-        if skin_pixels.size == 0:
-            return "summer", "cool", 0.5
-
-        # Calculate average skin color in Lab color space
-        img_lab = cv2.cvtColor(img_rgb, cv2.COLOR_RGB2LAB)
-        skin_lab = img_lab[skin_mask > 0]
-
-        avg_l = np.mean(skin_lab[:, 0])  # Lightness
-        avg_a = np.mean(skin_lab[:, 1])  # Green-Red
-        avg_b = np.mean(skin_lab[:, 2])  # Blue-Yellow
-
-        # Determine warm/cool based on a* and b* values
-        # Higher b* = warmer (yellow undertone)
-        # Lower b* = cooler (blue undertone)
-        is_warm = avg_b > 135  # b* > 135 indicates warm undertone
-
-        # Determine season based on lightness and undertone
-        if avg_l > 170:  # Light skin
-            if is_warm:
-                season, subtype = "spring", "light"
-            else:
-                season, subtype = "summer", "light"
-        elif avg_l > 130:  # Medium skin
-            if is_warm:
-                season, subtype = "autumn", "warm"
-            else:
-                season, subtype = "summer", "cool"
-        else:  # Dark skin
-            if is_warm:
-                season, subtype = "autumn", "deep"
-            else:
-                season, subtype = "winter", "deep"
-
-        # Confidence based on how clearly the undertone is determined
-        undertone_strength = abs(avg_b - 135) / 30  # How far from neutral
-        confidence = min(0.95, 0.6 + undertone_strength * 0.3)
-
-        return season, subtype, confidence
-
-    async def _analyze_with_external_api(self, image_bytes: bytes) -> dict:
-        """Fallback to external Color Tone API."""
         try:
-            response = await self.http_client.post(
-                f"{settings.color_tone_api_url}/analyze",
-                files={"file": ("image.jpg", image_bytes, "image/jpeg")},
+            response = await self.openai.chat.completions.create(
+                model="gpt-4o",  # 이미지 분석에 최적화된 모델
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "당신은 전문 퍼스널 컬러 컨설턴트입니다. 피부 톤, 언더톤, 색상 조화를 정확하게 분석합니다."
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": image_url, "detail": "high"}
+                            }
+                        ]
+                    }
+                ],
+                response_format={"type": "json_object"},
+                max_tokens=500,
+                temperature=0.3,
             )
-            response.raise_for_status()
-            return response.json()
-        except httpx.HTTPError as e:
-            logger.warning(f"External API failed: {e}, using mock")
-            return self._mock_analysis()
 
-    def _mock_analysis(self) -> dict:
-        """Generate mock analysis data when external API is unavailable."""
-        import random
+            result = json.loads(response.choices[0].message.content)
+            result["source"] = "gpt-4o-vision"
+            return result
 
-        seasons = ["spring", "summer", "autumn", "winter"]
-        subtypes = ["warm", "cool", "clear", "soft", "deep"]
-        emotions = ["happy", "neutral", "calm", "surprised"]
+        except Exception as e:
+            logger.warning(f"Vision API failed: {e}, using fallback")
+            return self._fallback_analysis()
 
+    def _fallback_analysis(self) -> dict:
+        """Fallback analysis when API is unavailable."""
         return {
             "tone": {
-                "season": random.choice(seasons),
-                "subtype": random.choice(subtypes),
-                "confidence": random.uniform(0.7, 0.95),
+                "season": "summer",
+                "subtype": "cool",
+                "confidence": 0.7,
+                "undertone": "cool",
+                "brightness": "medium",
+                "analysis_reason": "API 분석 실패로 기본값 사용"
             },
-            "palette": {"hex": ["#E6E6FA", "#87CEEB", "#FFB6C1", "#98FB98", "#D3D3D3"]},
             "emotion": {
-                "facial_expression": random.choice(emotions),
-                "facial_expression_confidence": random.uniform(0.6, 0.9),
+                "facial_expression": "neutral",
+                "facial_expression_confidence": 0.5
             },
+            "source": "fallback",
         }
 
     async def get_color_result(self, user_id: str) -> PersonalColorResult:
@@ -459,5 +424,5 @@ class ColorAnalyzerService:
         )
 
     async def close(self) -> None:
-        """Close HTTP client."""
-        await self.http_client.aclose()
+        """Cleanup resources."""
+        pass  # OpenAI client doesn't require explicit cleanup

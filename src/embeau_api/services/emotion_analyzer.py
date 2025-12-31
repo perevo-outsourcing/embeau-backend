@@ -1,6 +1,7 @@
-"""Emotion analysis service with RAG integration."""
+"""Emotion analysis service with ChatGPT API integration."""
 
 import json
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -22,6 +23,7 @@ from embeau_api.schemas.emotion import (
     WeeklyStats,
 )
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 
 # Emotion to healing color mapping
@@ -135,36 +137,45 @@ class EmotionAnalyzerService:
             raise EmotionAnalysisError(f"Failed to analyze emotion: {str(e)}")
 
     async def _analyze_with_openai(self, text: str) -> EmotionState:
-        """Analyze emotion using OpenAI API."""
-        prompt = f"""다음 텍스트에서 감정을 분석해주세요. 각 감정에 대해 0-100 사이의 점수를 JSON 형식으로 반환해주세요.
+        """Analyze emotion using OpenAI API (gpt-4o-mini for speed and cost efficiency)."""
+        prompt = f"""당신은 전문 심리 상담사입니다. 다음 텍스트에서 작성자의 감정 상태를 세밀하게 분석해주세요.
 
 텍스트: "{text}"
 
-다음 형식으로 응답해주세요:
-{{
-    "anxiety": <0-100>,
-    "stress": <0-100>,
-    "satisfaction": <0-100>,
-    "happiness": <0-100>,
-    "depression": <0-100>
-}}
+각 감정에 대해 0-100 사이의 점수를 매겨주세요.
+텍스트의 맥락, 단어 선택, 표현 방식을 종합적으로 고려하여 분석해주세요.
 
 점수 기준:
-- 0: 해당 감정 없음
-- 25: 약간 있음
-- 50: 보통
-- 75: 강함
-- 100: 매우 강함"""
+- 0-20: 거의 감지되지 않음
+- 21-40: 약하게 감지됨
+- 41-60: 보통 수준
+- 61-80: 강하게 감지됨
+- 81-100: 매우 강하게 감지됨
+
+다음 JSON 형식으로만 응답해주세요:
+{{
+    "anxiety": 0-100,
+    "stress": 0-100,
+    "satisfaction": 0-100,
+    "happiness": 0-100,
+    "depression": 0-100,
+    "dominant_emotion": "가장 두드러진 감정 이름",
+    "analysis_note": "간단한 분석 메모 (선택)"
+}}"""
 
         try:
             response = await self.openai.chat.completions.create(
-                model=settings.openai_model,
+                model=settings.openai_model,  # gpt-4o-mini - 텍스트 분석에 충분하고 빠름
                 messages=[
-                    {"role": "system", "content": "당신은 감정 분석 전문가입니다. 텍스트에서 감정을 정확하게 분석합니다."},
+                    {
+                        "role": "system",
+                        "content": "당신은 공감 능력이 뛰어난 심리 상담 전문가입니다. 텍스트에서 미묘한 감정의 뉘앙스까지 정확하게 파악합니다. 한국어 표현과 문화적 맥락을 잘 이해합니다."
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 response_format={"type": "json_object"},
-                temperature=0.3,
+                temperature=0.2,  # 더 일관된 분석을 위해 낮은 temperature
+                max_tokens=300,
             )
 
             result = json.loads(response.choices[0].message.content)
@@ -175,8 +186,8 @@ class EmotionAnalyzerService:
                 happiness=float(result.get("happiness", 0)),
                 depression=float(result.get("depression", 0)),
             )
-        except Exception:
-            # Fallback to keyword analysis
+        except Exception as e:
+            logger.warning(f"OpenAI emotion analysis failed: {e}, using keyword fallback")
             return self._analyze_with_keywords(text)
 
     def _analyze_with_keywords(self, text: str) -> EmotionState:

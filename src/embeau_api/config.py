@@ -37,18 +37,19 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:3000", "http://localhost:8000"]
 
-    # External APIs
+    # External APIs - ChatGPT Models
     openai_api_key: str = ""
-    openai_model: str = "gpt-4o-mini"
+    openai_model: str = "gpt-4o-mini"  # 텍스트 감정 분석용 (빠르고 저렴)
+    openai_vision_model: str = "gpt-4o"  # 이미지 분석용 (정확도 우선)
     openai_embed_model: str = "text-embedding-3-small"
 
-    # ML Models (local PyTorch models)
-    use_local_models: bool = True
+    # Legacy settings (deprecated - now using ChatGPT API)
+    use_local_models: bool = False  # 로컬 모델 비활성화
     models_dir: str = "models"
     bisenet_weights: str = "models/79999_iter.pth"
     emotion_model_weights: str = "models/best_densenet121_rafdb.pth"
 
-    # Color Tone API (external fallback)
+    # Color Tone API (deprecated - using ChatGPT Vision)
     color_tone_api_url: str = "http://localhost:8001"
 
     # RAG System
