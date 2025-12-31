@@ -176,11 +176,7 @@ async def root() -> dict:
 
 
 # Include API routers
-# Mount at /api for frontend compatibility
 app.include_router(api_v1_router, prefix="/api")
-
-# Also mount without prefix for direct access
-app.include_router(api_v1_router, prefix="")
 
 
 if __name__ == "__main__":

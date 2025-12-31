@@ -3,11 +3,41 @@
 from fastapi import APIRouter, HTTPException, status
 
 from embeau_api.core.exceptions import AuthenticationError, ValidationError
-from embeau_api.deps import AuthServiceDep, CurrentUser
-from embeau_api.schemas.auth import LoginRequest, LoginResponse, UserResponse
+from embeau_api.deps import AuthServiceDep, CurrentUser, DbSession
+from embeau_api.schemas.auth import LoginRequest, LoginResponse, RegisterRequest, UserResponse
 from embeau_api.schemas.base import ApiResponse
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
+
+
+@router.post("/register", response_model=ApiResponse[LoginResponse])
+async def register(
+    data: RegisterRequest,
+    auth_service: AuthServiceDep,
+    db: DbSession,
+) -> ApiResponse[LoginResponse]:
+    """
+    Register a new research participant.
+
+    Creates a new user account and returns login credentials.
+    """
+    try:
+        user = await auth_service.register(data)
+        await db.commit()
+
+        # Auto-login after registration
+        login_data = LoginRequest(email=data.email, participantId=data.participant_id)
+        user, token = await auth_service.login(login_data)
+        await db.commit()
+
+        user_response = auth_service.to_response(user)
+        return ApiResponse.ok(LoginResponse(user=user_response, token=token))
+    except ValidationError as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        )
 
 
 @router.post("/login", response_model=ApiResponse[LoginResponse])
